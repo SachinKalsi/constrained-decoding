@@ -1,12 +1,10 @@
 """
 Single-label classification with trie-constrained decoding.
 
-Output is guaranteed to be exactly one of the provided labels,
+The output is guaranteed to be exactly one of the provided labels,
 regardless of model weights or sampling strategy.
 
-Usage
------
-python examples/single_label.py
+Run: python examples/single_label.py
 """
 
 import torch
@@ -14,66 +12,50 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, LogitsProcessorLis
 
 from constrained_decoding import ConstrainedTrie, TrieLogitsProcessor
 
-
-# ── 1. Define your taxonomy ────────────────────────────────────────────────────
-
+# 1. labels
 LABELS = ["Science", "Sports", "Politics", "Technology"]
 
-# ── 2. Build the trie ──────────────────────────────────────────────────────────
-
+# 2. build the trie
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
 
 trie = ConstrainedTrie()
 for label in LABELS:
-    # always tokenize as continuation (leading space), not as sentence start
-    token_ids = tokenizer.encode(" " + label, add_special_tokens=False)
-    trie.insert(token_ids)
+    # tokenize as a continuation (leading space), not as a sentence start
+    trie.insert(tokenizer.encode(" " + label, add_special_tokens=False))
 
-# sanity check: verify every label round-trips correctly
-trie.verify(LABELS, tokenizer)
-print("Trie verified.")
+trie.verify(LABELS, tokenizer)  # one-time build-time check
+print("Trie built and verified.")
 
-# ── 3. Build the prompt ────────────────────────────────────────────────────────
-
+# 3. prompt
 text = "Scientists discovered a new species of deep-sea fish near hydrothermal vents."
-label_list = ", ".join(LABELS)
 
 prompt = (
-    f"Classify the text into exactly one of these categories: {label_list}.\n"
+    f"Classify the text into one of: {', '.join(LABELS)}.\n"
     f"Text: {text}\n"
     f"Category:"
 )
 
 input_ids = tokenizer(prompt, return_tensors="pt").input_ids
-prompt_length = input_ids.shape[1]
 
-# ── 4. Load the model and run constrained generation ──────────────────────────
-
+# 4. constrained generation
 model = AutoModelForCausalLM.from_pretrained(
     "Qwen/Qwen2.5-7B-Instruct",
     torch_dtype=torch.float16,
     device_map="auto",
 )
 
-processor = TrieLogitsProcessor(
-    trie=trie,
-    prompt_length=prompt_length,
-    eos_token_id=tokenizer.eos_token_id,
-)
+processor = TrieLogitsProcessor(trie, input_ids.shape[1], tokenizer.eos_token_id)
 
 with torch.no_grad():
     output = model.generate(
         input_ids.to(model.device),
         logits_processor=LogitsProcessorList([processor]),
         max_new_tokens=20,
-        do_sample=False,   # greedy; swap to True + temperature for sampling
+        do_sample=False,
     )
 
-label = tokenizer.decode(
-    output[0, prompt_length:], skip_special_tokens=True
-).strip()
+label = tokenizer.decode(output[0, input_ids.shape[1]:], skip_special_tokens=True).strip()
 
 print(f"Input : {text}")
-print(f"Output: {label}")
-assert label in LABELS, f"Constraint violated: '{label}' is not in the label set"
-print("Constraint check passed.")
+print(f"Label : {label}")
+assert label in LABELS, f"Constraint violated: '{label}' not in label set"

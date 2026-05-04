@@ -1,13 +1,11 @@
 """
 Multi-label classification with trie-constrained decoding.
 
-Output is a comma-separated list of labels, each guaranteed to be from
-the provided taxonomy, with no repeats.  The model stops when it emits
-EOS or when all labels have been used.
+The output is a comma-separated list of labels. Each label is guaranteed
+to be from the taxonomy, with no repeats. The model stops whenever it
+picks EOS — it is not forced to emit all labels.
 
-Usage
------
-python examples/multi_label.py
+Run: python examples/multi_label.py
 """
 
 import torch
@@ -15,48 +13,38 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, LogitsProcessorLis
 
 from constrained_decoding import ConstrainedTrie, MultiLabelTrieLogitsProcessor
 
-
-# ── 1. Define your taxonomy ────────────────────────────────────────────────────
-
+# 1. labels
 LABELS = ["Science", "Sports", "Politics", "Technology"]
 
-# ── 2. Build the trie ──────────────────────────────────────────────────────────
-
+# 2. build the trie
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
 
 trie = ConstrainedTrie()
 for label in LABELS:
-    token_ids = tokenizer.encode(" " + label, add_special_tokens=False)
-    trie.insert(token_ids)
+    trie.insert(tokenizer.encode(" " + label, add_special_tokens=False))
 
 trie.verify(LABELS, tokenizer)
-print("Trie verified.")
+print("Trie built and verified.")
 
-# separator: ", " between labels
-sep_token_ids = tokenizer.encode(", ", add_special_tokens=False)
-print(f"Separator token IDs: {sep_token_ids}  "
-      f"(decoded: '{tokenizer.decode(sep_token_ids)}')")
+sep_ids = tokenizer.encode(", ", add_special_tokens=False)
+print(f"Separator: {sep_ids} → '{tokenizer.decode(sep_ids)}'")
 
-# ── 3. Build the prompt ────────────────────────────────────────────────────────
-
+# 3. prompt
 text = (
     "The government announced new funding for climate research "
     "while the national football team secured a spot in the finals."
 )
-label_list = ", ".join(LABELS)
 
 prompt = (
-    f"Classify the text into one or more of these categories: {label_list}.\n"
-    f"Separate multiple categories with a comma.\n"
+    f"Classify the text into one or more of: {', '.join(LABELS)}.\n"
+    f"Separate multiple labels with a comma.\n"
     f"Text: {text}\n"
-    f"Categories:"
+    f"Labels:"
 )
 
 input_ids = tokenizer(prompt, return_tensors="pt").input_ids
-prompt_length = input_ids.shape[1]
 
-# ── 4. Load model and run constrained generation ──────────────────────────────
-
+# 4. constrained generation
 model = AutoModelForCausalLM.from_pretrained(
     "Qwen/Qwen2.5-7B-Instruct",
     torch_dtype=torch.float16,
@@ -64,10 +52,7 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 
 processor = MultiLabelTrieLogitsProcessor(
-    trie=trie,
-    prompt_length=prompt_length,
-    eos_token_id=tokenizer.eos_token_id,
-    sep_token_ids=sep_token_ids,
+    trie, input_ids.shape[1], tokenizer.eos_token_id, sep_ids
 )
 
 with torch.no_grad():
@@ -78,17 +63,13 @@ with torch.no_grad():
         do_sample=False,
     )
 
-raw = tokenizer.decode(output[0, prompt_length:], skip_special_tokens=True).strip()
-predicted_labels = [l.strip() for l in raw.split(",") if l.strip()]
+raw    = tokenizer.decode(output[0, input_ids.shape[1]:], skip_special_tokens=True).strip()
+labels = [lb.strip() for lb in raw.split(",") if lb.strip()]
 
 print(f"\nInput  : {text}")
-print(f"Raw output : {raw}")
-print(f"Labels     : {predicted_labels}")
+print(f"Output : {raw}")
+print(f"Labels : {labels}")
 
-# verify no label outside taxonomy, no duplicates
-assert all(l in LABELS for l in predicted_labels), \
-    f"Constraint violated: unexpected label in {predicted_labels}"
-assert len(predicted_labels) == len(set(predicted_labels)), \
-    f"Constraint violated: duplicate labels in {predicted_labels}"
-
+assert all(lb in LABELS for lb in labels), f"Unexpected label in: {labels}"
+assert len(labels) == len(set(labels)),    f"Duplicate labels in: {labels}"
 print("Constraint checks passed.")
