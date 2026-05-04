@@ -71,9 +71,14 @@ class MultiLabelTrieLogitsProcessor(LogitsProcessor):
         self.prompt_length = prompt_length
         self.eos           = eos_token_id
         self.sep           = sep_token_ids
+        # build once at init: first token -> all labels that start with it.
+        # used at ROOT to check which first tokens are fully exhausted.
+        self._by_first = {}
+        for label in trie.all_labels():
+            self._by_first.setdefault(label[0], []).append(label)
 
     def _parse(self, tokens):
-        """Split token list on separator → (seen labels, current partial label)."""
+        """Split token list on separator -> (seen labels, current partial label)."""
         seen, current, sep_len = [], [], len(self.sep)
         i = 0
         while i < len(tokens):
@@ -96,11 +101,14 @@ class MultiLabelTrieLogitsProcessor(LogitsProcessor):
             valid.add(self.eos)       # model can stop ...
             valid.update(self.sep)    # ... or continue with a separator
 
-        # back at root after a separator: skip labels the model already picked
+        # back at root after a separator: remove a first token only when
+        # every label that starts with it has been seen. this ensures
+        # sibling labels (e.g. "Technology/AI" after "Technology") are
+        # never accidentally blocked.
         if not current and seen:
-            for label in self.trie.all_labels():
-                if label in seen:
-                    valid.discard(label[0])
+            for first_tok, group in self._by_first.items():
+                if all(lbl in seen for lbl in group):
+                    valid.discard(first_tok)
             if not valid:
                 valid.add(self.eos)   # safety: no new labels available
 
