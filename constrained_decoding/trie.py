@@ -1,25 +1,20 @@
 """
-trie.py
--------
-Prefix-tree (trie) over tokenized label sequences.
+trie.py — prefix tree over tokenized label sequences.
 
-Build once from your taxonomy, then query at every decode step to get the
-set of valid next tokens. Rebuild whenever the label set changes.
+Build once from your taxonomy, query at every decode step to get the set
+of valid next tokens. Rebuild whenever the label set changes.
 """
 
-from __future__ import annotations
-from dataclasses import dataclass, field
 
-
-@dataclass
 class TrieNode:
-    children: dict[int, "TrieNode"] = field(default_factory=dict)
-    is_end: bool = False
+    def __init__(self):
+        self.children = {}   # token_id → TrieNode
+        self.is_end   = False
 
 
 class ConstrainedTrie:
     """
-    Trie that stores every valid label as a path of token IDs.
+    Stores every valid label as a path of token IDs.
 
     Usage
     -----
@@ -29,15 +24,11 @@ class ConstrainedTrie:
         trie.insert(token_ids)
     """
 
-    def __init__(self) -> None:
+    def __init__(self):
         self.root = TrieNode()
 
-    # ------------------------------------------------------------------
-    # Building
-    # ------------------------------------------------------------------
-
-    def insert(self, token_ids: list[int]) -> None:
-        """Insert one label (as a list of token IDs) into the trie."""
+    def insert(self, token_ids):
+        """Add one label (list of token IDs) to the trie."""
         node = self.root
         for tid in token_ids:
             if tid not in node.children:
@@ -45,54 +36,41 @@ class ConstrainedTrie:
             node = node.children[tid]
         node.is_end = True
 
-    # ------------------------------------------------------------------
-    # Querying
-    # ------------------------------------------------------------------
-
-    def get_valid_next_tokens(self, prefix: list[int]) -> set[int]:
-        """
-        Return the set of token IDs that are valid continuations of `prefix`.
-
-        Returns an empty set if `prefix` is not a valid path in the trie
-        (this should never happen when constraints are working correctly).
-        """
-        node = self._walk(prefix)
-        if node is None:
-            return set()
+    def get_valid_next_tokens(self, prefix):
+        """Which tokens can the model emit next, given what it has emitted so far."""
+        node = self.root
+        for tid in prefix:
+            if tid not in node.children:
+                return set()
+            node = node.children[tid]
         return set(node.children.keys())
 
-    def is_complete(self, prefix: list[int]) -> bool:
-        """Return True if `prefix` is a complete label (ends at an end node)."""
-        node = self._walk(prefix)
-        return node is not None and node.is_end
+    def is_complete(self, prefix):
+        """True if prefix exactly spells out one of the inserted labels."""
+        node = self.root
+        for tid in prefix:
+            if tid not in node.children:
+                return False
+            node = node.children[tid]
+        return node.is_end
 
-    # ------------------------------------------------------------------
-    # Introspection (used by MultiLabelTrieLogitsProcessor)
-    # ------------------------------------------------------------------
+    def all_labels(self):
+        """Return every stored label as a tuple of token IDs."""
+        results = []
 
-    def get_all_label_sequences(self) -> list[tuple[int, ...]]:
-        """Return every root-to-end path as a tuple of token IDs."""
-        results: list[tuple[int, ...]] = []
-
-        def dfs(node: TrieNode, path: list[int]) -> None:
-            if node.is_end and path:
+        def walk(node, path):
+            if node.is_end:
                 results.append(tuple(path))
             for tid, child in node.children.items():
-                dfs(child, path + [tid])
+                walk(child, path + [tid])
 
-        dfs(self.root, [])
+        walk(self.root, [])
         return results
 
-    # ------------------------------------------------------------------
-    # Validation
-    # ------------------------------------------------------------------
-
-    def verify(self, labels: list[str], tokenizer) -> bool:
+    def verify(self, labels, tokenizer):
         """
-        Check that every label round-trips correctly through the trie.
-        Call this once after build time — it is the correctness proof.
-
-        Returns True if the trie exactly encodes the given labels.
+        Check every label round-trips correctly through the trie.
+        Call once after build — this is the build-time correctness proof.
         Raises ValueError with details if anything is wrong.
         """
         expected = set()
@@ -106,25 +84,11 @@ class ConstrainedTrie:
                 )
             expected.add(tids)
 
-        actual = set(self.get_all_label_sequences())
+        actual = set(self.all_labels())
         if actual != expected:
-            missing = expected - actual
-            extra   = actual - expected
             raise ValueError(
                 f"Trie mismatch.\n"
-                f"  Missing paths : {missing}\n"
-                f"  Unexpected paths: {extra}"
+                f"  Missing  : {expected - actual}\n"
+                f"  Unexpected: {actual - expected}"
             )
         return True
-
-    # ------------------------------------------------------------------
-    # Internal
-    # ------------------------------------------------------------------
-
-    def _walk(self, prefix: list[int]) -> TrieNode | None:
-        node = self.root
-        for tid in prefix:
-            if tid not in node.children:
-                return None
-            node = node.children[tid]
-        return node
