@@ -4,7 +4,7 @@ Trie-based constrained decoding for LLM classification.
 
 Forces any open-weight model to output **exactly** one of your taxonomy labels — structural guarantee, not a probabilistic one. Supports single-label and multi-label classification with automatic repeat-prevention.
 
-Read the full explanation: [Constrained Decoding: Forcing LLMs to Respect Your Taxonomy](https://medium.com/@sachinkalsi)
+Read the full explanation: [Constrained Decoding: Forcing LLMs to Respect Your Taxonomy](https://medium.com/@sachinkalsi/constrained-decoding-forcing-llms-to-respect-your-taxonomy-3aaaf13329f9)
 
 ---
 
